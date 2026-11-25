@@ -2,7 +2,10 @@ use std::fmt;
 
 use rand::distr::{Distribution, weighted::WeightedIndex};
 
+use crate::GameStatus;
+
 const WEIGHTS: [i32; 2] = [90, 10];
+const COLOR_DIGITS: [i32; 6] = [1, 2, 3, 4, 5, 6];
 
 pub struct Field {
     contents: Vec<Content>,
@@ -27,7 +30,7 @@ impl Field {
         }
     }
 
-    pub fn reveal(&mut self, x: usize, y: usize) {
+    pub fn reveal(&mut self, x: usize, y: usize) -> GameStatus {
         if x >= self.width || y >= self.height {
             print!("\x1b[{}HInvalid move! x: {x}, y: {y}", self.height + 1);
         }
@@ -45,12 +48,16 @@ impl Field {
                         }
                     })
                     .collect();
+
+                GameStatus::Over
             }
             Content::Empty(_) => {
                 self.contents[y * self.width + x] =
-                    Content::Revealed(self.surrounding_bombs(x, y))
+                    Content::Revealed(self.surrounding_bombs(x, y));
+
+                GameStatus::Running
             }
-            _ => {}
+            _ => GameStatus::Running
         }
     }
 }
@@ -63,9 +70,21 @@ impl Field {
 
 impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut it = COLOR_DIGITS.iter().cycle();
+        let width_string = self.width.to_string();
+        
+        for i in (0..self.width).rev() {
+            if i != 0 && i % width_string.chars().count() == 0 {
+                let _ = writeln!(f);
+            }
+
+            let digit = i.to_string().chars().next().unwrap();
+            write!(f, "\x1b[3{}m{digit}\x1b[0m", it.next().unwrap())?
+        }
+
         let mut first = true;
         for i in 0..self.height {
-            if first {
+            if !first {
                 writeln!(f)?;
             } else {
                 first = false;
@@ -76,7 +95,7 @@ impl fmt::Display for Field {
             }
         }
 
-        Ok(())
+        write!(f, "\nRemaining unflagged bombs: {}", self.bomb_cnt)
     }
 }
 
@@ -119,9 +138,9 @@ impl fmt::Display for Content {
         match self {
             Self::Empty(flagged) | Self::Bomb(flagged) => {
                 if *flagged {
-                    write!(f, "\x1b[2m@\x1b[0m")
-                } else {
                     write!(f, "\x1b[2;31mX\x1b[0m")
+                } else {
+                    write!(f, "\x1b[2m@\x1b[0m")
                 }
             }
             Self::RevealedBomb => write!(f, "\x1b[33;41m#\x1b[0m"),
