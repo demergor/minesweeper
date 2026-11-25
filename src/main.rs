@@ -2,49 +2,118 @@ mod field;
 
 use std::io::{self, Write};
 
-fn main() {
+use crossterm::{
+    self,
+    cursor::{Hide, MoveTo, Show},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton,
+        MouseEventKind,
+    },
+    execute,
+    style::Print,
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+};
+
+fn main() -> io::Result<()> {
+    let mut out = io::stdout();
+    execute!(out, Hide, EnterAlternateScreen,)?;
+
     let mut buf = String::new();
-    print!("\x1b[?1049h\x1b[?1006h\x1b[H\x1b[2J");
-    print!("Enter the field width: ");
-    let _ = io::stdout().flush();
-    let _ = io::stdin().read_line(&mut buf);
+    let mut run = true;
 
-    let Some(width_str) = buf.strip_suffix("\n") else {
-        panic!("Couldn't read width!");
-    };
-
-    let Ok(width) = width_str.parse::<usize>() else {
-        panic!("Couldn't read width!");
-    };
-
-    let Some(height_str) = buf.strip_suffix("\n") else {
-        panic!("Couldn't read width!");
-    };
-
-    let Ok(height) = height_str.parse::<usize>() else {
-        panic!("Couldn't read height!");
-    };
-
-    print!("Enter the field height: ");
-    let _ = io::stdout().flush();
-    let _ = io::stdin().read_line(&mut buf);
-
-    let field = field::Field::new(width, height);
-    loop {
-        print!("\x1b[H\x1b[2J");
+    while run {
+        execute!(
+            out,
+            Clear(ClearType::All),
+            MoveTo(0, 0),
+            DisableMouseCapture
+        )?;
+        terminal::disable_raw_mode()?;
         buf.clear();
+        print!("Enter the field width: ");
+        let _ = out.flush();
         let _ = io::stdin().read_line(&mut buf);
-        if buf == "quit\n" {
-            break;
-        }
 
-        println!("{field}");
-        let _ = io::stdout().flush();
+        let Some(width_str) = buf.strip_suffix("\n") else {
+            panic!("Couldn't read width!");
+        };
+
+        let Ok(width) = width_str.parse::<usize>() else {
+            panic!("Couldn't read width!");
+        };
+
+        buf.clear();
+        print!("Enter the field height: ");
+        let _ = out.flush();
+        let _ = io::stdin().read_line(&mut buf);
+
+        let Some(height_str) = buf.strip_suffix("\n") else {
+            panic!("Couldn't read height!");
+        };
+
+        let Ok(height) = height_str.parse::<usize>() else {
+            panic!("Couldn't read height!");
+        };
+
+        let mut field = field::Field::new(width, height);
+        terminal::enable_raw_mode()?;
+        execute!(out, EnableMouseCapture, Clear(ClearType::All), MoveTo(0, 0))?;
+
+        let mut status = GameStatus::Running;
+        while status == GameStatus::Running {
+            execute!(out, Print(&field))?;
+            field.undirty();
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.code == event::KeyCode::Esc {
+                        run = false;
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    let col: usize = mouse.column as usize;
+                    let row: usize = mouse.row as usize;
+
+                    field.hover(col, row);
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            status = field.reveal(col, row);
+                        }
+                        MouseEventKind::Down(MouseButton::Right) => {
+                            field.toggle_flag(col, row);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+
+            if status != GameStatus::Over {
+                continue;
+            }
+
+            execute!(
+                out,
+                MoveTo(0, 0),
+                Clear(ClearType::All),
+                Print(&field),
+                Print("Press any key to start over")
+            )?;
+
+            loop {
+                if let Event::Key(_) = event::read()? {
+                    break;
+                }
+            }
+        }
     }
 
-    print!("\x1b[?1049l\x1b[?1006l");
+    terminal::disable_raw_mode()?;
+    execute!(out, LeaveAlternateScreen, DisableMouseCapture, Show)?;
+
+    Ok(())
 }
 
+#[derive(Eq, PartialEq)]
 pub enum GameStatus {
     Running,
     Over,
