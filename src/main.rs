@@ -10,13 +10,29 @@ use crossterm::{
         MouseEventKind,
     },
     execute,
-    style::Print,
+    style::{
+        Attribute::{Bold, Italic, Reset},
+        Color::{Green, Red},
+        Print, SetAttribute, SetForegroundColor,
+    },
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
 fn main() -> io::Result<()> {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let _ = terminal::disable_raw_mode();
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            Show
+        );
+
+        eprintln!("{panic_info}");
+    }));
+
     let mut out = io::stdout();
-    execute!(out, Hide, EnterAlternateScreen,)?;
+    execute!(out, EnterAlternateScreen,)?;
 
     let mut buf = String::new();
     let mut run = true;
@@ -26,11 +42,18 @@ fn main() -> io::Result<()> {
             out,
             Clear(ClearType::All),
             MoveTo(0, 0),
-            DisableMouseCapture
+            DisableMouseCapture,
+            Show,
         )?;
         terminal::disable_raw_mode()?;
+        let term_sz = terminal::size().unwrap();
+
+        if term_sz.0 < 1 || term_sz.1 < 3 {
+            panic!("Terminal dimensions too small!");
+        }
+
         buf.clear();
-        print!("Enter the field width: ");
+        print!("Enter the field width (max {}): ", term_sz.0);
         let _ = out.flush();
         let _ = io::stdin().read_line(&mut buf);
 
@@ -39,11 +62,11 @@ fn main() -> io::Result<()> {
         };
 
         let Ok(width) = width_str.parse::<usize>() else {
-            panic!("Couldn't read width!");
+            break;
         };
 
         buf.clear();
-        print!("Enter the field height: ");
+        print!("Enter the field height (max {}): ", term_sz.1 - 3);
         let _ = out.flush();
         let _ = io::stdin().read_line(&mut buf);
 
@@ -52,12 +75,22 @@ fn main() -> io::Result<()> {
         };
 
         let Ok(height) = height_str.parse::<usize>() else {
-            panic!("Couldn't read height!");
+            break;
         };
 
-        let mut field = field::Field::new(width, height);
+        let mut field = field::Field::new(
+            width.min(term_sz.0 as usize),
+            height.min((term_sz.1 - 3) as usize),
+        );
+
         terminal::enable_raw_mode()?;
-        execute!(out, EnableMouseCapture, Clear(ClearType::All), MoveTo(0, 0))?;
+        execute!(
+            out,
+            EnableMouseCapture,
+            Clear(ClearType::All),
+            MoveTo(0, 0),
+            Hide
+        )?;
 
         let mut status = GameStatus::Running;
         while status == GameStatus::Running {
@@ -67,6 +100,7 @@ fn main() -> io::Result<()> {
                 Event::Key(key) => {
                     if key.code == event::KeyCode::Esc {
                         run = false;
+                        break;
                     }
                 }
                 Event::Mouse(mouse) => {
@@ -87,16 +121,35 @@ fn main() -> io::Result<()> {
                 _ => {}
             }
 
-            if status != GameStatus::Over {
+            if status == GameStatus::Running {
                 continue;
+            }
+
+            execute!(out, MoveTo(0, 0), Clear(ClearType::All), Print(&field))?;
+
+            if status == GameStatus::Won {
+                execute!(
+                    out,
+                    SetAttribute(Bold),
+                    SetForegroundColor(Green),
+                    Print("\n\rYOU WON!"),
+                    SetAttribute(Reset),
+                )?;
+            } else {
+                execute!(
+                    out,
+                    SetAttribute(Bold),
+                    SetForegroundColor(Red),
+                    Print("\n\rYOU LOST!"),
+                    SetAttribute(Reset),
+                )?;
             }
 
             execute!(
                 out,
-                MoveTo(0, 0),
-                Clear(ClearType::All),
-                Print(&field),
-                Print("Press any key to start over")
+                SetAttribute(Italic),
+                Print("\n\rPress any key to start over"),
+                SetAttribute(Reset),
             )?;
 
             loop {
@@ -117,4 +170,5 @@ fn main() -> io::Result<()> {
 pub enum GameStatus {
     Running,
     Over,
+    Won,
 }

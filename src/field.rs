@@ -5,12 +5,12 @@ use rand::distr::{Distribution, weighted::WeightedIndex};
 use crate::GameStatus;
 
 const WEIGHTS: [i32; 2] = [90, 10];
-const _COLOR_DIGITS: [i32; 6] = [1, 2, 3, 4, 5, 6];
 
 pub struct Field {
     contents: Vec<Content>,
     bomb_cnt: usize,
     flag_cnt: usize,
+    remaining_empty: usize,
     last_hover: (usize, usize),
     dirty: (bool, Vec<(usize, usize)>),
     width: usize,
@@ -27,6 +27,7 @@ impl Field {
             contents,
             bomb_cnt,
             flag_cnt: 0,
+            remaining_empty: width * height - bomb_cnt,
             last_hover: (0, 0),
             dirty: (true, Vec::new()),
             width,
@@ -58,13 +59,12 @@ impl Field {
                 GameStatus::Over
             }
             Content::Empty(_, _) => {
-                self.contents[y * self.width + x] =
-                    Content::Revealed(self.surrounding_bombs(x, y));
-                // self.ripple_reveal(x, y);
-                self.dirty.0 = true;
-                self.dirty.1.push((x, y));
-
-                GameStatus::Running
+                self.ripple_reveal(x, y, &mut vec![false; self.width * self.height]);
+                if self.remaining_empty == 0 {
+                    GameStatus::Won
+                } else {
+                    GameStatus::Running
+                }
             }
             _ => GameStatus::Running,
         }
@@ -93,7 +93,11 @@ impl Field {
 
     pub fn hover(&mut self, x: usize, y: usize) {
         match &mut self.contents[self.last_hover.1 * self.width + self.last_hover.0] {
-            Content::Empty(_, hover) | Content::Bomb(_, hover) => *hover = false,
+            Content::Empty(_, hover) | Content::Bomb(_, hover) => {
+                *hover = false;
+                self.dirty.0 = true;
+                self.dirty.1.push(self.last_hover);
+            }
             _ => {}
         }
 
@@ -119,21 +123,29 @@ impl Field {
 }
 
 impl Field {
-    fn surrounding_bombs(&self, x: usize, y: usize) -> usize {
+    fn ripple_reveal(&mut self, x: usize, y: usize, visited: &mut Vec<bool>) {
         if x >= self.width || y >= self.height {
-            return 0;
+            return;
+        }
+
+        if !matches!(self.contents[y * self.width + x], Content::Empty(_, _))
+            || visited[y * self.width + x]
+        {
+            return;
         }
 
         let mut bomb_cnt = 0;
+        let mut neighbors = Vec::with_capacity(8);
+
         for nx in -1isize..2 {
             for ny in -1isize..2 {
                 let nx = x as isize + nx;
-                if nx < 0 || nx > self.width as isize {
+                if nx < 0 || nx >= self.width as isize {
                     continue;
                 }
 
                 let ny = y as isize + ny;
-                if ny < 0 || ny > self.height as isize {
+                if ny < 0 || ny >= self.height as isize {
                     continue;
                 }
 
@@ -141,33 +153,35 @@ impl Field {
                     continue;
                 }
 
-                match self.contents[y * self.width + x] {
+                let nx = nx as usize;
+                let ny = ny as usize;
+
+                match self.contents[ny * self.width + nx] {
                     Content::Bomb(_, _) | Content::RevealedBomb => bomb_cnt += 1,
+                    Content::Empty(_, _) => neighbors.push((nx, ny)),
                     _ => {}
                 }
             }
         }
 
-        bomb_cnt
+        visited[y * self.width + x] = true;
+        self.contents[y * self.width + x] = Content::Revealed(bomb_cnt);
+        self.remaining_empty -= 1;
+        self.dirty.0 = true;
+        self.dirty.1.push((x, y));
+
+        if bomb_cnt != 0 {
+            return;
+        }
+
+        for (x, y) in neighbors {
+            self.ripple_reveal(x, y, visited);
+        }
     }
 }
 
 impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        /*
-        let mut it = COLOR_DIGITS.iter().cycle();
-        let width_string = self.width.to_string();
-
-        for i in (0..self.width).rev() {
-            if i != 0 && i % width_string.chars().count() == 0 {
-                let _ = writeln!(f);
-            }
-
-            let digit = i.to_string().chars().next().unwrap();
-            write!(f, "\x1b[3{}m{digit}\x1b[0m", it.next().unwrap())?
-        }
-        */
-
         let (dirty, dirties) = &self.dirty;
         if !dirty {
             return Ok(());
@@ -183,6 +197,13 @@ impl fmt::Display for Field {
                     self.contents[y * self.width + x]
                 )?;
             }
+
+            write!(
+                f,
+                "\x1b[{};0H\x1b[2KRemaining unflagged bombs: {}",
+                self.height + 1,
+                self.bomb_cnt - self.flag_cnt.min(self.bomb_cnt)
+            )?;
 
             return Ok(());
         }
@@ -246,14 +267,14 @@ impl fmt::Display for Content {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty(flagged, hovered) | Self::Bomb(flagged, hovered) => {
-                if *hovered {
+                if !*hovered {
                     write!(f, "\x1b[2m")?;
                 }
 
                 if *flagged {
-                    write!(f, "\x1b[2;31mX")?;
+                    write!(f, "\x1b[31mX")?;
                 } else {
-                    write!(f, "@")?;
+                    write!(f, "\x1b[97m@")?;
                 }
 
                 write!(f, "\x1b[0m")
