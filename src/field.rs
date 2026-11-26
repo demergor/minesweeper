@@ -280,7 +280,7 @@ impl fmt::Display for Content {
                             write!(f, "\x1b[1;100m")?;
                         }
 
-                        write!(f, "\x1b[31mX\x1b[0m")
+                        write!(f, "\x1b[91mX\x1b[0m")
                     }
                     (false, hovered) => {
                         if *hovered {
