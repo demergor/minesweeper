@@ -49,12 +49,13 @@ impl Field {
 
         match self.contents[y * self.width + x] {
             Content::Bomb(_, _) => {
+                self.contents[y * self.width + x] = Content::RevealedBomb(true);
                 self.contents = self
                     .contents
                     .drain(..)
                     .map(|cell| {
                         if let Content::Bomb(_, _) = cell {
-                            return Content::RevealedBomb;
+                            return Content::RevealedBomb(false);
                         }
 
                         cell
@@ -164,7 +165,7 @@ impl Field {
                 let ny = ny as usize;
 
                 match self.contents[ny * self.width + nx] {
-                    Content::Bomb(_, _) | Content::RevealedBomb => bomb_cnt += 1,
+                    Content::Bomb(_, _) | Content::RevealedBomb(_) => bomb_cnt += 1,
                     Content::Empty(_, _) => neighbors.push((nx, ny)),
                     _ => {}
                 }
@@ -241,7 +242,7 @@ pub enum Content {
     Empty(bool, bool),
     Bomb(bool, bool),
     Revealed(usize),
-    RevealedBomb,
+    RevealedBomb(bool),
 }
 
 impl Content {
@@ -291,7 +292,13 @@ impl fmt::Display for Content {
                     }
                 }
             }
-            Self::RevealedBomb => write!(f, "\x1b[33;41m#\x1b[0m"),
+            Self::RevealedBomb(incorrectly_flagged) => {
+                if *incorrectly_flagged {
+                    write!(f, "\x1b[6m")?;
+                } 
+
+                write!(f, "\x1b[33;41m#\x1b[0m")
+            }
             Self::Revealed(remaining) => {
                 if *remaining == 0 {
                     return write!(f, " ");
