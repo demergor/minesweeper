@@ -4,8 +4,6 @@ use rand::distr::{Distribution, weighted::WeightedIndex};
 
 use crate::GameStatus;
 
-const WEIGHTS: [i32; 2] = [90, 10];
-
 pub struct Field {
     contents: Vec<Content>,
     bomb_cnt: usize,
@@ -18,10 +16,19 @@ pub struct Field {
 }
 
 impl Field {
-    pub fn new(width: usize, height: usize) -> Field {
+    pub fn new(width: usize, height: usize, bomb_ratio: usize) -> Field {
+        let weights = vec![
+            if bomb_ratio >= 100 {
+                1
+            } else {
+                100 - bomb_ratio
+            },
+            bomb_ratio,
+        ];
+
         let mut contents: Vec<Content> =
             (0..width * height).map(|_| Content::default()).collect();
-        let bomb_cnt = Content::populate(&mut contents);
+        let bomb_cnt = Content::populate(&mut contents, &weights);
 
         Field {
             contents,
@@ -238,9 +245,9 @@ pub enum Content {
 }
 
 impl Content {
-    pub fn populate(collection: &mut [Content]) -> usize {
+    pub fn populate(collection: &mut [Content], weights: &[usize]) -> usize {
         let mut rng = rand::rng();
-        let dist = WeightedIndex::new(WEIGHTS).unwrap();
+        let dist = WeightedIndex::new(weights).unwrap();
         let mut bomb_cnt = 0;
 
         for cell in collection.iter_mut() {
@@ -267,17 +274,22 @@ impl fmt::Display for Content {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty(flagged, hovered) | Self::Bomb(flagged, hovered) => {
-                if !*hovered {
-                    write!(f, "\x1b[2m")?;
-                }
+                match (flagged, hovered) {
+                    (true, hovered) => {
+                        if *hovered {
+                            write!(f, "\x1b[1;100m")?;
+                        }
 
-                if *flagged {
-                    write!(f, "\x1b[31mX")?;
-                } else {
-                    write!(f, "\x1b[97m@")?;
-                }
+                        write!(f, "\x1b[31mX\x1b[0m")
+                    }
+                    (false, hovered) => {
+                        if *hovered {
+                            write!(f, "\x1b[1;7m")?;
+                        }
 
-                write!(f, "\x1b[0m")
+                        write!(f, "\x1b[2;90m@\x1b[0m")
+                    }
+                }
             }
             Self::RevealedBomb => write!(f, "\x1b[33;41m#\x1b[0m"),
             Self::Revealed(remaining) => {

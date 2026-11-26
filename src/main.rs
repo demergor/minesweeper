@@ -52,16 +52,18 @@ fn main() -> io::Result<()> {
             panic!("Terminal dimensions too small!");
         }
 
+        let (max_height, max_width) = ((term_sz.1 - 3) as usize, term_sz.0 as usize);
+
         execute!(
             out,
             SetAttribute(Italic),
             SetAttribute(Dim),
-            Print("(Enter gibberish/nothing to terminate)\n\r"),
+            Print("(Enter gibberish to terminate)\n\r"),
             SetAttribute(Reset),
         )?;
 
         buf.clear();
-        print!("Enter the field width (max {}): ", term_sz.0);
+        print!("Enter the field width (max {}): ", max_width);
         let _ = out.flush();
         let _ = io::stdin().read_line(&mut buf);
 
@@ -69,12 +71,16 @@ fn main() -> io::Result<()> {
             panic!("Couldn't read width!");
         };
 
-        let Ok(width) = width_str.parse::<usize>() else {
+        let width = if width_str.is_empty() {
+            max_width
+        } else if let Ok(width) = width_str.parse::<usize>() {
+            width
+        } else {
             break;
         };
 
         buf.clear();
-        print!("Enter the field height (max {}): ", term_sz.1 - 3);
+        print!("Enter the field height (max {}): ", max_height);
         let _ = out.flush();
         let _ = io::stdin().read_line(&mut buf);
 
@@ -82,13 +88,35 @@ fn main() -> io::Result<()> {
             panic!("Couldn't read height!");
         };
 
-        let Ok(height) = height_str.parse::<usize>() else {
+        let height = if height_str.is_empty() {
+            max_height
+        } else if let Ok(height) = height_str.parse::<usize>() {
+            height
+        } else {
+            break;
+        };
+
+        buf.clear();
+        print!("Enter bomb ratio (default: 10): ");
+        let _ = out.flush();
+        let _ = io::stdin().read_line(&mut buf);
+
+        let Some(ratio_str) = buf.strip_suffix("\n") else {
+            panic!("Couldn't read bomb ratio!");
+        };
+
+        let bomb_ratio = if ratio_str.is_empty() {
+            10
+        } else if let Ok(ratio) = ratio_str.parse::<usize>() {
+            ratio
+        } else {
             break;
         };
 
         let mut field = field::Field::new(
             width.min(term_sz.0 as usize),
             height.min((term_sz.1 - 3) as usize),
+            bomb_ratio,
         );
 
         terminal::enable_raw_mode()?;
