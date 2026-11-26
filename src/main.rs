@@ -11,7 +11,7 @@ use crossterm::{
     },
     execute,
     style::{
-        Attribute::{Bold, Italic, Reset},
+        Attribute::{Bold, Dim, Italic, Reset},
         Color::{Green, Red},
         Print, SetAttribute, SetForegroundColor,
     },
@@ -51,6 +51,14 @@ fn main() -> io::Result<()> {
         if term_sz.0 < 1 || term_sz.1 < 3 {
             panic!("Terminal dimensions too small!");
         }
+
+        execute!(
+            out,
+            SetAttribute(Italic),
+            SetAttribute(Dim),
+            Print("(Enter gibberish/nothing to terminate)\n\r"),
+            SetAttribute(Reset),
+        )?;
 
         buf.clear();
         print!("Enter the field width (max {}): ", term_sz.0);
