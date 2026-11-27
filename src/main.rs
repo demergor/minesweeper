@@ -48,22 +48,29 @@ fn main() -> io::Result<()> {
         terminal::disable_raw_mode()?;
         let term_sz = terminal::size().unwrap();
 
-        if term_sz.0 < 1 || term_sz.1 < 3 {
+        if term_sz.0 < 1 || term_sz.1 < 4 {
             panic!("Terminal dimensions too small!");
         }
 
-        let (max_height, max_width) = ((term_sz.1 - 3) as usize, term_sz.0 as usize);
+        let (max_height, max_width) = ((term_sz.1 - 4) as usize, term_sz.0 as usize);
 
         execute!(
             out,
             SetAttribute(Italic),
             SetAttribute(Dim),
-            Print("(Enter gibberish to terminate)\n\r"),
+            Print(concat!(
+                "Ingame controls:\r\n",
+                "-- ESCAPE: quit game\r\n",
+                "-- Left click: reveal cell\r\n",
+                "-- Right click: (un)flag cell\r\n",
+                "-- Middle click: (un)assert cell (prevents accidental clicks)\r\n\n",
+                "(Non-numeric input terminates)\r\n"
+            )),
             SetAttribute(Reset),
         )?;
 
         buf.clear();
-        print!("Enter the field width (max {}): ", max_width);
+        print!("Enter the field width (default: {}): ", max_width);
         let _ = out.flush();
         let _ = io::stdin().read_line(&mut buf);
 
@@ -80,7 +87,7 @@ fn main() -> io::Result<()> {
         };
 
         buf.clear();
-        print!("Enter the field height (max {}): ", max_height);
+        print!("Enter the field height (default: {}): ", max_height);
         let _ = out.flush();
         let _ = io::stdin().read_line(&mut buf);
 
@@ -143,14 +150,17 @@ fn main() -> io::Result<()> {
                     let col: usize = mouse.column as usize;
                     let row: usize = mouse.row as usize;
 
-                    field.hover(col, row);
                     match mouse.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
                             status = field.reveal(col, row);
                         }
                         MouseEventKind::Down(MouseButton::Right) => {
-                            field.toggle_flag(col, row);
+                            field.toggle_flag(col, row, false);
                         }
+                        MouseEventKind::Down(MouseButton::Middle) => {
+                            field.toggle_flag(col, row, true);
+                        }
+                        MouseEventKind::Moved => field.hover(col, row),
                         _ => {}
                     }
                 }
@@ -184,6 +194,7 @@ fn main() -> io::Result<()> {
             execute!(
                 out,
                 SetAttribute(Italic),
+                SetAttribute(Dim),
                 Print("\n\rPress any key to start over"),
                 SetAttribute(Reset),
             )?;

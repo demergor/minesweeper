@@ -48,6 +48,9 @@ impl Field {
         }
 
         match self.contents[y * self.width + x] {
+            Content::Empty(Hardness::Hard, _) | Content::Bomb(Hardness::Hard, _) => {
+                return GameStatus::Running;
+            }
             Content::Bomb(_, _) => {
                 self.contents[y * self.width + x] = Content::RevealedBomb(true);
                 self.contents = self
@@ -78,21 +81,36 @@ impl Field {
         }
     }
 
-    pub fn toggle_flag(&mut self, x: usize, y: usize) -> GameStatus {
+    pub fn toggle_flag(&mut self, x: usize, y: usize, hard: bool) -> GameStatus {
         if x >= self.width || y >= self.height {
             return GameStatus::Running;
         }
 
+        let hardness = if hard { Hardness::Hard } else { Hardness::Soft };
         match &mut self.contents[y * self.width + x] {
-            Content::Empty(flagged, _) | Content::Bomb(flagged, _) => {
-                if *flagged {
-                    *flagged = false;
-                    self.flag_cnt -= 1;
-                } else {
-                    *flagged = true;
+            Content::Empty(flag, _) | Content::Bomb(flag, _) => match &flag {
+                Hardness::None => {
+                    *flag = hardness;
                     self.flag_cnt += 1;
+
+                    self.dirty.0 = true;
+                    self.dirty.1.push((x, y));
                 }
-            }
+                fh if **fh == hardness => {
+                    *flag = Hardness::None;
+                    self.flag_cnt -= 1;
+
+                    self.dirty.0 = true;
+                    self.dirty.1.push((x, y));
+                }
+                Hardness::Soft if hardness == Hardness::Hard => {
+                    *flag = Hardness::Hard;
+
+                    self.dirty.0 = true;
+                    self.dirty.1.push((x, y));
+                }
+                _ => {}
+            },
             _ => {}
         }
 
@@ -208,9 +226,15 @@ impl fmt::Display for Field {
 
             write!(
                 f,
-                "\x1b[{};0H\x1b[2KRemaining unflagged bombs: {}",
+                concat!(
+                    "\x1b[{};0H\x1b[2KUnflagged bombs remaining: {}",
+                    "\x1b[{};0H\x1b[2K\x1b[1mProgress: {}%\x1b[m",
+                ),
                 self.height + 1,
-                self.bomb_cnt - self.flag_cnt.min(self.bomb_cnt)
+                self.bomb_cnt - self.flag_cnt.min(self.bomb_cnt),
+                self.height + 2,
+                100 - ((self.remaining_empty * 100)
+                    / ((self.width * self.height) - self.bomb_cnt)),
             )?;
 
             return Ok(());
@@ -231,16 +255,23 @@ impl fmt::Display for Field {
 
         write!(
             f,
-            "\n\rRemaining unflagged bombs: {}",
-            self.bomb_cnt - self.flag_cnt.min(self.bomb_cnt)
+            concat!(
+                "\x1b[{};0H\x1b[2KUnflagged bombs remaining: {}",
+                "\x1b[{};0H\x1b[2K\x1b[1mProgress: {}%\x1b[m",
+            ),
+            self.height + 1,
+            self.bomb_cnt - self.flag_cnt.min(self.bomb_cnt),
+            self.height + 2,
+            100 - ((self.remaining_empty * 100)
+                / ((self.width * self.height) - self.bomb_cnt)),
         )
     }
 }
 
 #[derive(Eq, PartialEq)]
 pub enum Content {
-    Empty(bool, bool),
-    Bomb(bool, bool),
+    Empty(Hardness, bool),
+    Bomb(Hardness, bool),
     Revealed(usize),
     RevealedBomb(bool),
 }
@@ -255,9 +286,9 @@ impl Content {
             *cell = match dist.sample(&mut rng) {
                 1 => {
                     bomb_cnt += 1;
-                    Content::Bomb(false, false)
+                    Content::Bomb(Hardness::None, false)
                 }
-                _ => Content::Empty(false, false),
+                _ => Content::Empty(Hardness::None, false),
             }
         }
 
@@ -267,37 +298,38 @@ impl Content {
 
 impl Default for Content {
     fn default() -> Self {
-        Self::Empty(false, false)
+        Self::Empty(Hardness::None, false)
     }
 }
 
 impl fmt::Display for Content {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Empty(flagged, hovered) | Self::Bomb(flagged, hovered) => {
-                match (flagged, hovered) {
-                    (true, hovered) => {
+            Self::Empty(flag, hovered) | Self::Bomb(flag, hovered) => {
+                match (flag, hovered) {
+                    (hardness, hovered) if *hardness == Hardness::None => {
                         if *hovered {
-                            write!(f, "\x1b[1;100m")?;
+                            write!(f, "\x1b[1;2;90;7m@\x1b[m")
+                        } else {
+                            write!(f, "\x1b[2;90m@\x1b[m")
                         }
-
-                        write!(f, "\x1b[2;31mX\x1b[0m")
                     }
-                    (false, hovered) => {
+                    (hardness, hovered) => {
+                        let color = if *hardness == Hardness::Soft { 31 } else { 33 };
                         if *hovered {
-                            write!(f, "\x1b[1;7m")?;
+                            write!(f, "\x1b[1;2;{};100mX\x1b[m", color)
+                        } else {
+                            write!(f, "\x1b[2;{}mX\x1b[m", color)
                         }
-
-                        write!(f, "\x1b[2;90m@\x1b[0m")
                     }
                 }
             }
             Self::RevealedBomb(incorrectly_flagged) => {
                 if *incorrectly_flagged {
                     write!(f, "\x1b[6m")?;
-                } 
+                }
 
-                write!(f, "\x1b[33;41m#\x1b[0m")
+                write!(f, "\x1b[33;41m#\x1b[m")
             }
             Self::Revealed(remaining) => {
                 if *remaining == 0 {
@@ -311,8 +343,15 @@ impl fmt::Display for Content {
                 } else {
                     31
                 };
-                write!(f, "\x1b[{}m{}\x1b[0m", color, remaining)
+                write!(f, "\x1b[{}m{}\x1b[m", color, remaining)
             }
         }
     }
+}
+
+#[derive(Eq, PartialEq)]
+pub enum Hardness {
+    None,
+    Soft,
+    Hard,
 }
