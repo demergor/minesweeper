@@ -8,6 +8,7 @@ pub struct Field {
     contents: Vec<Content>,
     bomb_cnt: usize,
     flag_cnt: usize,
+    move_cnt: usize,
     remaining_empty: usize,
     last_hover: (usize, usize),
     dirty: (bool, Vec<(usize, usize)>),
@@ -34,6 +35,7 @@ impl Field {
             contents,
             bomb_cnt,
             flag_cnt: 0,
+            move_cnt: 0,
             remaining_empty: width * height - bomb_cnt,
             last_hover: (0, 0),
             dirty: (true, Vec::new()),
@@ -56,21 +58,24 @@ impl Field {
                 self.contents = self
                     .contents
                     .drain(..)
-                    .map(|cell| {
-                        if let Content::Bomb(_, _) = cell {
-                            return Content::RevealedBomb(false);
+                    .map(|cell| match cell {
+                        Content::Bomb(_, _) => Content::RevealedBomb(false),
+                        Content::Empty(hardness, _) if hardness != Hardness::None => {
+                            Content::FalseFlag
                         }
-
-                        cell
+                        _ => cell,
                     })
                     .collect();
                 self.dirty.0 = true;
                 self.dirty.1.clear();
+                self.move_cnt += 1;
 
                 GameStatus::Over
             }
             Content::Empty(_, _) => {
                 self.ripple_reveal(x, y, &mut vec![false; self.width * self.height]);
+                self.move_cnt += 1;
+
                 if self.remaining_empty == 0 {
                     GameStatus::Won
                 } else {
@@ -141,6 +146,10 @@ impl Field {
             }
             _ => {}
         };
+    }
+
+    pub fn render_height(&self) -> usize {
+        self.height + 4
     }
 
     pub fn undirty(&mut self) {
@@ -228,11 +237,14 @@ impl fmt::Display for Field {
                 f,
                 concat!(
                     "\x1b[{};0H\x1b[2KUnflagged bombs remaining: {}",
+                    "\x1b[{};0H\x1b[2KMoves played: {}",
                     "\x1b[{};0H\x1b[2K\x1b[1mProgress: {}%\x1b[m",
                 ),
                 self.height + 1,
                 self.bomb_cnt - self.flag_cnt.min(self.bomb_cnt),
                 self.height + 2,
+                self.move_cnt,
+                self.height + 3,
                 100 - ((self.remaining_empty * 100)
                     / ((self.width * self.height) - self.bomb_cnt)),
             )?;
@@ -257,11 +269,14 @@ impl fmt::Display for Field {
             f,
             concat!(
                 "\x1b[{};0H\x1b[2KUnflagged bombs remaining: {}",
+                "\x1b[{};0H\x1b[2KMoves played: {}",
                 "\x1b[{};0H\x1b[2K\x1b[1mProgress: {}%\x1b[m",
             ),
             self.height + 1,
             self.bomb_cnt - self.flag_cnt.min(self.bomb_cnt),
             self.height + 2,
+            self.move_cnt,
+            self.height + 3,
             100 - ((self.remaining_empty * 100)
                 / ((self.width * self.height) - self.bomb_cnt)),
         )
@@ -274,6 +289,7 @@ pub enum Content {
     Bomb(Hardness, bool),
     Revealed(usize),
     RevealedBomb(bool),
+    FalseFlag,
 }
 
 impl Content {
@@ -345,6 +361,7 @@ impl fmt::Display for Content {
                 };
                 write!(f, "\x1b[{}m{}\x1b[m", color, remaining)
             }
+            Self::FalseFlag => write!(f, "\x1b[6;31;43mX\x1b[m"),
         }
     }
 }

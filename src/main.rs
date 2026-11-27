@@ -1,3 +1,4 @@
+mod cli;
 mod field;
 
 use std::io::{self, Write};
@@ -18,6 +19,10 @@ use crossterm::{
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
+use crate::cli::query_opts;
+
+const OFFSET: usize = 6;
+
 fn main() -> io::Result<()> {
     std::panic::set_hook(Box::new(|panic_info| {
         let _ = terminal::disable_raw_mode();
@@ -31,114 +36,55 @@ fn main() -> io::Result<()> {
         eprintln!("{panic_info}");
     }));
 
+    let program_start = std::time::Instant::now();
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen,)?;
 
-    let mut buf = String::new();
     let mut run = true;
-
     while run {
         execute!(
             out,
-            Clear(ClearType::All),
             MoveTo(0, 0),
+            Clear(ClearType::All),
             DisableMouseCapture,
             Show,
         )?;
         terminal::disable_raw_mode()?;
-        let term_sz = terminal::size().unwrap();
-
-        if term_sz.0 < 1 || term_sz.1 < 4 {
-            panic!("Terminal dimensions too small!");
-        }
-
-        let (max_height, max_width) = ((term_sz.1 - 4) as usize, term_sz.0 as usize);
-
-        execute!(
-            out,
-            SetAttribute(Italic),
-            SetAttribute(Dim),
-            Print(concat!(
-                "Ingame controls:\r\n",
-                "-- ESCAPE: quit game\r\n",
-                "-- Left click: reveal cell\r\n",
-                "-- Right click: (un)flag cell\r\n",
-                "-- Middle click: (un)assert cell (prevents accidental clicks)\r\n\n",
-                "(Non-numeric input terminates)\r\n"
-            )),
-            SetAttribute(Reset),
-        )?;
-
-        buf.clear();
-        print!("Enter the field width (default: {}): ", max_width);
-        let _ = out.flush();
-        let _ = io::stdin().read_line(&mut buf);
-
-        let Some(width_str) = buf.strip_suffix("\n") else {
-            panic!("Couldn't read width!");
-        };
-
-        let width = if width_str.is_empty() {
-            max_width
-        } else if let Ok(width) = width_str.parse::<usize>() {
-            width
-        } else {
+        let (Some(width), Some(height), Some(bomb_ratio)) = query_opts()? else {
             break;
         };
 
-        buf.clear();
-        print!("Enter the field height (default: {}): ", max_height);
-        let _ = out.flush();
-        let _ = io::stdin().read_line(&mut buf);
-
-        let Some(height_str) = buf.strip_suffix("\n") else {
-            panic!("Couldn't read height!");
-        };
-
-        let height = if height_str.is_empty() {
-            max_height
-        } else if let Ok(height) = height_str.parse::<usize>() {
-            height
-        } else {
-            break;
-        };
-
-        buf.clear();
-        print!("Enter bomb ratio (default: 10): ");
-        let _ = out.flush();
-        let _ = io::stdin().read_line(&mut buf);
-
-        let Some(ratio_str) = buf.strip_suffix("\n") else {
-            panic!("Couldn't read bomb ratio!");
-        };
-
-        let bomb_ratio = if ratio_str.is_empty() {
-            10
-        } else if let Ok(ratio) = ratio_str.parse::<usize>() {
-            ratio
-        } else {
-            break;
-        };
-
-        let mut field = field::Field::new(
-            width.min(term_sz.0 as usize),
-            height.min((term_sz.1 - 3) as usize),
-            bomb_ratio,
-        );
+        let mut field = field::Field::new(width, height, bomb_ratio);
 
         terminal::enable_raw_mode()?;
         execute!(
             out,
+            Hide,
             EnableMouseCapture,
-            Clear(ClearType::All),
             MoveTo(0, 0),
-            Hide
+            Clear(ClearType::All),
+            Print(&field),
         )?;
 
         let mut status = GameStatus::Running;
+        let start = std::time::Instant::now();
+
         while status == GameStatus::Running {
-            execute!(out, Print(&field))?;
-            field.undirty();
+            let (elapsed_hours, elapsed_minutes, elapsed_secs) =
+                seconds_to_hms(start.elapsed().as_secs());
+            print!(
+                "\x1b[{}H{}h {}m {}s",
+                field.render_height(),
+                elapsed_hours,
+                elapsed_minutes,
+                elapsed_secs,
+            );
+            out.flush()?;
+
+            if !event::poll(std::time::Duration::from_millis(1000))? {
+                continue;
+            }
+
             match event::read()? {
                 Event::Key(key) => {
                     if key.code == event::KeyCode::Esc {
@@ -167,18 +113,19 @@ fn main() -> io::Result<()> {
                 _ => {}
             }
 
+            execute!(out, MoveTo(0, 0), Print(&field))?;
+            field.undirty();
+
             if status == GameStatus::Running {
                 continue;
             }
-
-            execute!(out, MoveTo(0, 0), Clear(ClearType::All), Print(&field))?;
 
             if status == GameStatus::Won {
                 execute!(
                     out,
                     SetAttribute(Bold),
                     SetForegroundColor(Green),
-                    Print("\n\rYOU WON!"),
+                    Print("\r\n\nYOU WON!"),
                     SetAttribute(Reset),
                 )?;
             } else {
@@ -186,7 +133,7 @@ fn main() -> io::Result<()> {
                     out,
                     SetAttribute(Bold),
                     SetForegroundColor(Red),
-                    Print("\n\rYOU LOST!"),
+                    Print("\r\n\nYOU LOST!"),
                     SetAttribute(Reset),
                 )?;
             }
@@ -209,6 +156,8 @@ fn main() -> io::Result<()> {
 
     terminal::disable_raw_mode()?;
     execute!(out, LeaveAlternateScreen, DisableMouseCapture, Show)?;
+    let (h, m, s) = seconds_to_hms(program_start.elapsed().as_secs());
+    println!("Your minesweeper session lasted {h} hours, {m} minutes, {s} seconds");
 
     Ok(())
 }
@@ -218,4 +167,13 @@ pub enum GameStatus {
     Running,
     Over,
     Won,
+}
+
+fn seconds_to_hms(mut seconds: u64) -> (u64, u64, u64) {
+    let mut minutes = seconds / 60;
+    seconds %= 60;
+    let hours = minutes / 60;
+    minutes %= 60;
+
+    (hours, minutes, seconds)
 }
